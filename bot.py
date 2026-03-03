@@ -7,99 +7,105 @@ import random
 import logging
 from dotenv import load_dotenv
 
-# --- CONFIGURATION & SECURITY ---
+# Load Local Environment (Railway handles this automatically in production)
 load_dotenv()
+
+# --- SECURITY CONSTANTS ---
 TOKEN = os.getenv('DISCORD_TOKEN')
 ROBLOX_API_KEY = os.getenv('ROBLOX_API_KEY')
-UNIVERSE_ID = int(os.getenv('UNIVERSE_ID', 0))
-TICKET_CATEGORY_ID = int(os.getenv('TICKET_CATEGORY_ID', 0))
-PLAYER_COUNT_VC = int(os.getenv('PLAYER_COUNT_VC', 0))
+UNIVERSE_ID = os.getenv('UNIVERSE_ID')
+TICKET_CATEGORY_ID = os.getenv('TICKET_CATEGORY_ID')
+PLAYER_COUNT_VC = os.getenv('PLAYER_COUNT_VC')
 
-# --- LOGGING SETUP ---
-# Generates clean, timestamped logs in your terminal instead of messy print statements
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Validate variables to prevent silent crashes on deployment
+if not all([TOKEN, ROBLOX_API_KEY, UNIVERSE_ID, TICKET_CATEGORY_ID, PLAYER_COUNT_VC]):
+    raise ValueError("Missing critical environment variables! Check your Railway variables tab.")
+
+UNIVERSE_ID = int(UNIVERSE_ID)
+TICKET_CATEGORY_ID = int(TICKET_CATEGORY_ID)
+PLAYER_COUNT_VC = int(PLAYER_COUNT_VC)
+
+# --- PROFESSIONAL LOGGING ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger("RottenFlesh")
 
-# --- ROBLOX API BRIDGE ---
+# --- ROBLOX CLOUD CONNECTION ---
 experience = rblxopencloud.Experience(UNIVERSE_ID, api_key=ROBLOX_API_KEY)
 
 # ==========================================
-# UI COMPONENTS (PERSISTENT TICKET SYSTEM)
+# INTERACTIVE UI (TICKETS)
 # ==========================================
 
 class TicketView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None) # Timeout=None ensures the button works forever
+        super().__init__(timeout=None) 
 
-    @discord.ui.button(label="🎫 Open Support Ticket", style=discord.ButtonStyle.blurple, custom_id="open_ticket_btn")
-    async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🎫 Open Support Ticket", style=discord.ButtonStyle.blurple, custom_id="persistent_ticket_btn")
+    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild = interaction.guild
         category = guild.get_channel(TICKET_CATEGORY_ID)
         
         if not category:
-            return await interaction.response.send_message("Ticket category is not properly configured.", ephemeral=True)
+            return await interaction.response.send_message("Ticket system misconfigured. Category missing.", ephemeral=True)
             
         try:
-            # Sets strict permissions so only the user and admins can see the ticket
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(view_channel=False),
-                interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True),
-                guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
-            }
+            # Create a private channel
             channel = await guild.create_text_channel(
                 name=f"ticket-{interaction.user.name}",
                 category=category,
-                overwrites=overwrites
+                overwrites={
+                    guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                    interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, attach_files=True),
+                    guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True)
+                }
             )
-            await interaction.response.send_message(f"Ticket opened successfully: {channel.mention}", ephemeral=True)
-            await channel.send(f"Welcome to **Brainrot Gacha** support, {interaction.user.mention}. Please describe your issue in detail.")
+            await interaction.response.send_message(f"Your private support line is ready: {channel.mention}", ephemeral=True)
+            await channel.send(f"Welcome {interaction.user.mention}. Please drop a screenshot and description of your bug or issue.")
         except discord.Forbidden:
-            await interaction.response.send_message("Rotten Flesh lacks permissions to create channels.", ephemeral=True)
+            await interaction.response.send_message("I lack the 'Manage Channels' permission required to open a ticket.", ephemeral=True)
+            logger.error(f"Failed to create ticket for {interaction.user.name}: Missing Permissions")
 
 # ==========================================
-# MAIN BOT CLASS
+# BOT CORE CLASS
 # ==========================================
 
 class RottenFlesh(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix='!', intents=discord.Intents.all())
-        # The internal database for the Discord Gacha Simulator
+        super().__init__(command_prefix='!', intents=discord.Intents.all(), help_command=None)
+        
         self.gacha_pool = {
-            "Common": ["Rusted Bolt", "Plastic Soul", "Stale Bread"],
-            "Rare": ["Digital Ghost", "Neon Battery", "Cyber-Core"],
-            "Legendary": ["SIGMA OVERLORD", "VOID REAPER", "BRAINROT PRIMO"]
+            "Common": ["Rusted Bolt", "Plastic Soul"],
+            "Rare": ["Digital Ghost", "Neon Battery"],
+            "Legendary": ["SIGMA OVERLORD", "VOID REAPER"]
         }
 
     async def setup_hook(self):
-        # 1. Load the persistent ticket button
+        # 1. Register persistent UI
         self.add_view(TicketView())
-        
-        # 2. Sync Slash Commands to Discord
+        # 2. Sync slash commands globally
         await self.tree.sync()
-        logger.info("Slash commands synchronized successfully.")
-        
-        # 3. Start the live player counter background task
-        if PLAYER_COUNT_VC != 0:
-            self.live_stats.start()
+        logger.info("Global slash commands synchronized.")
+        # 3. Start background tasks
+        self.live_stats.start()
 
     async def on_ready(self):
-        logger.info(f"Rotten Flesh is online! Logged in as {self.user.name} ({self.user.id})")
-        await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="Brainrot Gacha servers"))
+        logger.info(f"Identity confirmed: {self.user.name} (ID: {self.user.id})")
+        await self.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name="over Brainrot Gacha"))
 
-    # --- LIVE PLAYER COUNTER TASK ---
-    @tasks.loop(minutes=5)
+    # --- LIVE DATA TASK ---
+    @tasks.loop(minutes=6) # 6 minutes to avoid rate-limiting on shared Railway IPs
     async def live_stats(self):
         try:
             info = experience.fetch_info()
             vc = self.get_channel(PLAYER_COUNT_VC)
-            if vc and isinstance(vc, discord.VoiceChannel):
+            if vc:
                 await vc.edit(name=f"🟢 Playing: {info.playing}")
         except Exception as e:
-            logger.error(f"Failed to update player count: {e}")
+            logger.warning(f"Roblox API Sync Error: {e}")
 
     @live_stats.before_loop
     async def before_live_stats(self):
-        await self.wait_until_ready() # Ensures the bot is fully loaded before trying to rename channels
+        await self.wait_until_ready()
 
 bot = RottenFlesh()
 
@@ -109,29 +115,31 @@ bot = RottenFlesh()
 
 @bot.tree.command(name="spawn_ticket_panel", description="Admin: Spawns the support ticket button.")
 @app_commands.default_permissions(administrator=True)
-async def spawn_ticket(interaction: discord.Interaction):
+async def spawn_ticket_panel(interaction: discord.Interaction):
     embed = discord.Embed(
-        title="Official Support",
-        description="Click the button below to open a private ticket with the moderation team.",
-        color=discord.Color.dark_theme()
+        title="Brainrot Gacha Support",
+        description="Click below to open a private ticket with our moderation and development team.",
+        color=0x2b2d31 # Discord's dark gray hex color
     )
     await interaction.channel.send(embed=embed, view=TicketView())
-    await interaction.response.send_message("Panel spawned securely.", ephemeral=True)
+    await interaction.response.send_message("Panel deployed.", ephemeral=True)
 
-@bot.tree.command(name="shout", description="Send a global message to all active Roblox servers.")
-@app_commands.describe(message="The message to broadcast in-game")
+@bot.tree.command(name="shout", description="Broadcast a global message to all active Roblox servers.")
+@app_commands.describe(message="The message to display in-game")
 @app_commands.default_permissions(administrator=True)
 async def shout(interaction: discord.Interaction, message: str):
+    await interaction.response.defer(ephemeral=True) # Prevent timeout while API is called
     try:
         experience.publish_message("GlobalAnnouncements", message)
-        await interaction.response.send_message(f"📢 In-game shout successful:\n`{message}`", ephemeral=True)
+        await interaction.followup.send(f"📢 In-game broadcast sent:\n`{message}`")
     except Exception as e:
-        await interaction.response.send_message(f"❌ Shout failed: {e}", ephemeral=True)
+        await interaction.followup.send(f"❌ Broadcast failed: {e}")
 
 @bot.tree.command(name="gift_item", description="Inject a gacha item into a player's Roblox inventory.")
-@app_commands.describe(roblox_id="The player's numeric Roblox User ID", item_name="Exact name of the item")
+@app_commands.describe(roblox_id="The player's numeric Roblox ID", item_name="Exact name of the item")
 @app_commands.default_permissions(administrator=True)
 async def gift_item(interaction: discord.Interaction, roblox_id: str, item_name: str):
+    await interaction.response.defer() 
     try:
         ds = experience.get_datastore("PlayerData")
         key = f"User_{roblox_id}"
@@ -142,51 +150,45 @@ async def gift_item(interaction: discord.Interaction, roblox_id: str, item_name:
             inventory.append(item_name)
             data["Inventory"] = inventory
             ds.set_entry(key, data)
-            await interaction.response.send_message(f"🎁 Successfully gifted **{item_name}** to Roblox ID `{roblox_id}`.")
+            await interaction.followup.send(f"🎁 Injected **{item_name}** into Roblox ID `{roblox_id}`.")
         else:
-            await interaction.response.send_message("❌ User data not found in DataStore. They may need to join the game first.", ephemeral=True)
+            await interaction.followup.send("❌ User DataStore not found. They must join the game at least once.")
     except Exception as e:
-        await interaction.response.send_message(f"❌ DataStore API Error: {e}", ephemeral=True)
+        await interaction.followup.send(f"❌ API Error: {e}")
 
 @bot.tree.command(name="roll", description="Try your luck at the Discord Gacha Simulator!")
 async def roll(interaction: discord.Interaction):
     chance = random.random()
-    if chance < 0.03: # 3% Legendary Drop Rate
+    if chance < 0.05: # 5%
         rarity = "Legendary"
         color = discord.Color.gold()
-    elif chance < 0.25: # 22% Rare Drop Rate
+    elif chance < 0.25: # 20%
         rarity = "Rare"
         color = discord.Color.blue()
-    else: # 75% Common Drop Rate
+    else: # 75%
         rarity = "Common"
         color = discord.Color.light_grey()
 
     item = random.choice(bot.gacha_pool[rarity])
     
-    embed = discord.Embed(title="🌀 Discord Gacha Pull", color=color)
+    embed = discord.Embed(title="🌀 Discord Gacha", color=color)
     embed.add_field(name="Result", value=f"**{item}**")
     embed.add_field(name="Rarity", value=rarity)
-    embed.set_footer(text="Join Brainrot Gacha on Roblox to keep it for real!")
     
     await interaction.response.send_message(embed=embed)
 
 @bot.tree.command(name="clear", description="Bulk delete messages in the current channel.")
-@app_commands.describe(amount="Number of messages to delete (max 100)")
+@app_commands.describe(amount="Number of messages to delete (1-100)")
 @app_commands.default_permissions(manage_messages=True)
 async def clear(interaction: discord.Interaction, amount: app_commands.Range[int, 1, 100]):
-    # Deferring is required for operations that might take longer than 3 seconds
     await interaction.response.defer(ephemeral=True) 
     deleted = await interaction.channel.purge(limit=amount)
-    await interaction.followup.send(f"🗑️ Rotten Flesh consumed {len(deleted)} messages.", ephemeral=True)
+    await interaction.followup.send(f"🗑️ Consumed {len(deleted)} messages.")
 
 # ==========================================
-# EXECUTION
+# BOOT SEQUENCE
 # ==========================================
 
 if __name__ == "__main__":
-    if not TOKEN:
-        logger.error("DISCORD_TOKEN is missing. Please check your .env file.")
-    else:
-        # log_handler=None prevents discord.py from overwriting our custom logger setup
-        bot.run(TOKEN, log_handler=None) 
-              
+    # The 'log_handler=None' prevents duplicate logs in the Railway console
+    bot.run(TOKEN, log_handler=None) 
